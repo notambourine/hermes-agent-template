@@ -5,9 +5,16 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 ARG HERMES_REF=v2026.4.30
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git tini && \
+    apt-get install -y --no-install-recommends curl ca-certificates git tini gnupg && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs gh && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=caddy-bin /usr/bin/caddy /usr/local/bin/caddy
