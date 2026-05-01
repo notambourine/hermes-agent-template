@@ -18,11 +18,22 @@
 			header Upgrade websocket
 		}
 
-		# WebSocket upgrades: preserve original Host. Starlette HTTP
-		# middleware (incl. host_header_middleware) doesn't run on WS,
-		# so no Host check upstream — and rewriting Host can interfere
-		# with the upgrade handshake on some Caddy/upstream combos.
-		reverse_proxy @websockets 127.0.0.1:9119
+		# WebSocket upgrades. Two things differ from the HTTP branch:
+		# 1. No Host rewrite — Starlette's HTTP middleware doesn't run
+		#    on WS, so host_header_middleware never fires here, and
+		#    rewriting Host can interfere with the upgrade handshake.
+		# 2. Strip X-Forwarded-*. uvicorn defaults to proxy_headers=True
+		#    with forwarded_allow_ips="127.0.0.1", which means it
+		#    rewrites scope['client'] from Caddy's loopback peer to the
+		#    real public IP from X-Forwarded-For. The dashboard's WS
+		#    handlers then check ws.client.host against _LOOPBACK_HOSTS
+		#    and close 4403. Stripping the header keeps scope['client']
+		#    as 127.0.0.1, which passes the loopback check.
+		reverse_proxy @websockets 127.0.0.1:9119 {
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+		}
 
 		# Everything else (HTML/REST): rewrite Host so the dashboard's
 		# host_header_middleware sees its own bound hostname.
