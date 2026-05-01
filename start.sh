@@ -1,10 +1,8 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Mirror dashboard-ref-only's startup: create every directory hermes expects
-# and seed a default config.yaml if the volume is empty. Without these,
-# `hermes dashboard` endpoints that hit logs/, sessions/, cron/, etc. can fail
-# with opaque errors even though no auth is actually involved.
+# Required: tini delivers SIGTERM here, we forward to the gateway via `exec`.
+
 mkdir -p /data/.hermes/cron /data/.hermes/sessions /data/.hermes/logs \
          /data/.hermes/memories /data/.hermes/skills /data/.hermes/pairing \
          /data/.hermes/hooks /data/.hermes/image_cache /data/.hermes/audio_cache \
@@ -13,16 +11,28 @@ mkdir -p /data/.hermes/cron /data/.hermes/sessions /data/.hermes/logs \
 if [ ! -f /data/.hermes/config.yaml ] && [ -f /opt/hermes-agent/cli-config.yaml.example ]; then
   cp /opt/hermes-agent/cli-config.yaml.example /data/.hermes/config.yaml
 fi
-
 [ ! -f /data/.hermes/.env ] && touch /data/.hermes/.env
 
-# Clear any stale gateway PID file left over from the previous container.
-# `hermes gateway` writes /data/.hermes/gateway.pid on start but does not
-# remove it on SIGTERM. Since /data is a persistent volume, the file
-# survives container restarts and causes every subsequent boot to exit with
-# "ERROR gateway.run: PID file race lost to another gateway instance".
-# No hermes process can be running at this point (we're pre-exec in a fresh
-# container), so removing the file unconditionally is safe.
-rm -f /data/.hermes/gateway.pid
+# `hermes gateway run --replace` (added upstream) supersedes the manual
+# stale-PID cleanup the old server.py needed.
 
-exec python /app/server.py
+: "${ADMIN_USERNAME:?ADMIN_USERNAME must be set}"
+: "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}"
+: "${PORT:=8080}"
+
+# bcrypt hash so plaintext never lands on disk
+ADMIN_PASSWORD_HASH="$(caddy hash-password --plaintext "$ADMIN_PASSWORD")"
+export ADMIN_USERNAME ADMIN_PASSWORD_HASH PORT
+
+# Caddy's own envsubst-equivalent is `{$VAR}` in Caddyfile syntax, so we
+# can hand it the template directly.
+cp /app/Caddyfile.tmpl /tmp/Caddyfile
+
+# Native dashboard on loopback — Caddy fronts it with basic auth at the edge.
+hermes dashboard --host 127.0.0.1 --port 9119 --no-open --tui &
+
+caddy run --config /tmp/Caddyfile --adapter caddyfile &
+
+# Foreground: tini → start.sh → exec → hermes gateway. SIGTERM reaches the
+# gateway directly so its own shutdown handlers run.
+exec hermes gateway run --replace

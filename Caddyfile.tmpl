@@ -1,0 +1,17 @@
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT} {
+	handle /health {
+		respond "ok" 200
+	}
+
+	handle {
+		basic_auth {
+			{$ADMIN_USERNAME} {$ADMIN_PASSWORD_HASH}
+		}
+		reverse_proxy 127.0.0.1:9119
+	}
+}
