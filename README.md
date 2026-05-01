@@ -42,7 +42,7 @@ Hermes Agent interacts entirely through messaging channels — there is no chat 
 ### 3. Deploy to Railway
 
 1. Click the **Deploy on Railway** button above
-2. Set the `ADMIN_PASSWORD` environment variable (or a random one will be generated and printed to deploy logs)
+2. Set the `ADMIN_PASSWORD` environment variable (or a random one will be generated on first boot and written to `/data/.hermes/.admin-password.txt`; the deploy log will show the path, not the password)
 3. Attach a **volume** mounted at `/data` (persists config across redeploys)
 4. Open your app URL — log in with username `admin` and your password
 
@@ -65,7 +65,7 @@ Message your Telegram bot. If you're a new user, a pairing request will appear i
 |----------|---------|-------------|
 | `PORT` | `8080` | Web server port (set automatically by Railway) |
 | `ADMIN_USERNAME` | `admin` | Basic auth username |
-| `ADMIN_PASSWORD` | *(auto-generated)* | Basic auth password — if unset, a random password is printed to logs |
+| `ADMIN_PASSWORD` | *(auto-generated)* | Admin password — if unset, a random password is generated on first boot and written to `/data/.hermes/.admin-password.txt` (mode 0600). Deploy logs show only the path. Read it once via the Railway shell, then set this variable and redeploy. |
 
 All other configuration (LLM provider, model, channels, tools) is managed through the admin dashboard.
 
