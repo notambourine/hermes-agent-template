@@ -212,6 +212,8 @@ def write_env(path: Path, data: dict[str, str]) -> None:
         lines.append("")
 
     path.write_text("\n".join(lines))
+    try: os.chmod(path, 0o600)
+    except OSError: pass
 
 
 def is_config_complete(data: dict[str, str] | None = None) -> bool:
