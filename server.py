@@ -72,7 +72,19 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 if not ADMIN_PASSWORD:
     ADMIN_PASSWORD = secrets.token_urlsafe(16)
-    print(f"[server] Admin credentials — username: {ADMIN_USERNAME}  password: {ADMIN_PASSWORD}", flush=True)
+    pw_file = Path(HERMES_HOME) / ".admin-password.txt"
+    pw_file.parent.mkdir(parents=True, exist_ok=True)
+    pw_file.write_text(ADMIN_PASSWORD)
+    try:
+        os.chmod(pw_file, 0o600)
+    except OSError:
+        pass
+    print(
+        f"[server] No ADMIN_PASSWORD set — generated one and wrote it to {pw_file} "
+        f"(mode 0600). Username: {ADMIN_USERNAME}. Read it once, then set ADMIN_PASSWORD "
+        "in Railway and redeploy.",
+        flush=True,
+    )
 else:
     print(f"[server] Admin username: {ADMIN_USERNAME}", flush=True)
 
