@@ -12,6 +12,20 @@
 		basic_auth {
 			{$ADMIN_USERNAME} {$ADMIN_PASSWORD_HASH}
 		}
+
+		@websockets {
+			header Connection *Upgrade*
+			header Upgrade websocket
+		}
+
+		# WebSocket upgrades: preserve original Host. Starlette HTTP
+		# middleware (incl. host_header_middleware) doesn't run on WS,
+		# so no Host check upstream — and rewriting Host can interfere
+		# with the upgrade handshake on some Caddy/upstream combos.
+		reverse_proxy @websockets 127.0.0.1:9119
+
+		# Everything else (HTML/REST): rewrite Host so the dashboard's
+		# host_header_middleware sees its own bound hostname.
 		reverse_proxy 127.0.0.1:9119 {
 			header_up Host {upstream_hostport}
 			header_up X-Forwarded-Host {host}
