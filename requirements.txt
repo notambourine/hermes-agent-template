@@ -7,3 +7,4 @@ httpx==0.28.1
 # hermes's /api/pty, /api/ws, /api/events endpoints. httpx does not speak
 # WebSockets, so we need a dedicated client library.
 websockets==16.0
+pyyaml==6.0.2
