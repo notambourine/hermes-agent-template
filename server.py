@@ -286,6 +286,42 @@ def _is_authenticated(request: Request) -> bool:
     return _verify_auth_token(request.cookies.get(COOKIE_NAME, ""))
 
 
+# Per-IP failed-login tracker. Single-process app, so an in-memory deque is enough.
+_LOGIN_FAILS: dict[str, deque] = {}
+_LOGIN_LOCK_WINDOW_SHORT = (5, 60)     # 5 fails / 60s
+_LOGIN_LOCK_WINDOW_LONG = (10, 600)    # 10 fails / 10min
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+
+def _login_locked(ip: str) -> bool:
+    now = time.time()
+    fails = _LOGIN_FAILS.get(ip)
+    if not fails:
+        return False
+    while fails and now - fails[0] > _LOGIN_LOCK_WINDOW_LONG[1]:
+        fails.popleft()
+    short_n = sum(1 for t in fails if now - t <= _LOGIN_LOCK_WINDOW_SHORT[1])
+    if short_n >= _LOGIN_LOCK_WINDOW_SHORT[0]:
+        return True
+    if len(fails) >= _LOGIN_LOCK_WINDOW_LONG[0]:
+        return True
+    return False
+
+
+def _login_record_fail(ip: str) -> None:
+    _LOGIN_FAILS.setdefault(ip, deque(maxlen=20)).append(time.time())
+
+
+def _login_clear(ip: str) -> None:
+    _LOGIN_FAILS.pop(ip, None)
+
+
 def _safe_return_to(value: str) -> str:
     """Reject open-redirect attempts — only allow same-origin relative paths."""
     if not value or not value.startswith("/") or value.startswith("//"):
@@ -376,8 +412,14 @@ async def page_login(request: Request) -> Response:
     if _is_authenticated(request):
         return RedirectResponse(_safe_return_to(request.query_params.get("returnTo", "/")), status_code=302)
     rt = _safe_return_to(request.query_params.get("returnTo", "/"))
-    error_html = ('<div class="err">Invalid username or password</div>'
-                  if request.query_params.get("error") else "")
+    err = request.query_params.get("error", "")
+    if err == "ratelimit":
+        error_html = ('<div class="err">Too many failed attempts. '
+                      'Please wait a minute before trying again.</div>')
+    elif err:
+        error_html = '<div class="err">Invalid username or password</div>'
+    else:
+        error_html = ""
     html = (LOGIN_PAGE_HTML
             .replace("__ERROR__", error_html)
             .replace("__RETURN_TO__", _html_escape(rt)))
@@ -390,10 +432,17 @@ async def login_post(request: Request) -> Response:
     username = str(form.get("username", ""))
     password = str(form.get("password", ""))
     return_to = _safe_return_to(str(form.get("returnTo", "/")))
+    ip = _client_ip(request)
+
+    if _login_locked(ip):
+        return RedirectResponse(
+            f"/login?returnTo={_url_quote(return_to)}&error=ratelimit", status_code=302
+        )
 
     valid_user = _hmac.compare_digest(username, ADMIN_USERNAME)
     valid_pw = _hmac.compare_digest(password, ADMIN_PASSWORD)
     if valid_user and valid_pw:
+        _login_clear(ip)
         resp = RedirectResponse(return_to, status_code=302)
         resp.set_cookie(
             COOKIE_NAME,
@@ -404,6 +453,7 @@ async def login_post(request: Request) -> Response:
             path="/",
         )
         return resp
+    _login_record_fail(ip)
     return RedirectResponse(f"/login?returnTo={_url_quote(return_to)}&error=1", status_code=302)
 
 
