@@ -2,7 +2,7 @@ FROM caddy:2-alpine AS caddy-bin
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-ARG HERMES_REF=v2026.4.30
+ARG HERMES_REF=main
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git tini gnupg && \
@@ -19,6 +19,12 @@ RUN apt-get update && \
 
 COPY --from=caddy-bin /usr/bin/caddy /usr/local/bin/caddy
 
+# Cache-bust the Hermes clone layer when ${HERMES_REF} advances upstream.
+# Docker's ADD revalidates remote URLs on every build, so when the GitHub
+# commit JSON for the ref changes (i.e. main moves), this layer's hash
+# changes and the subsequent git clone re-runs with fresh sources.
+ADD https://api.github.com/repos/NousResearch/hermes-agent/commits/${HERMES_REF} /tmp/hermes-commit.json
+
 RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \
     cd /opt/hermes-agent && \
     uv pip install --system --no-cache -e ".[all]" && \
@@ -28,7 +34,7 @@ RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/h
     cd /opt/hermes-agent/ui-tui && \
     npm install --silent --no-fund --no-audit --progress=false && \
     npm run build && \
-    rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
+    rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm /tmp/hermes-commit.json
 
 RUN mkdir -p /data/.hermes /app
 
