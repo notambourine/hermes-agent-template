@@ -1,8 +1,6 @@
-FROM caddy:2-alpine AS caddy-bin
-
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-ARG HERMES_REF=v2026.4.30
+ARG HERMES_REF=main
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git tini gnupg && \
@@ -17,7 +15,15 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends nodejs gh && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=caddy-bin /usr/bin/caddy /usr/local/bin/caddy
+# cloudflared: terminates a Cloudflare Tunnel from inside the container.
+# Connects outbound to Cloudflare's edge, forwards inbound traffic to the
+# Hermes dashboard on 127.0.0.1:9119. Cloudflare Access handles auth.
+RUN curl -fsSLo /usr/local/bin/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture)" && \
+    chmod +x /usr/local/bin/cloudflared
+
+# Cache-bust the Hermes clone layer when ${HERMES_REF} advances upstream.
+ADD https://api.github.com/repos/NousResearch/hermes-agent/commits/${HERMES_REF} /tmp/hermes-commit.json
 
 RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \
     cd /opt/hermes-agent && \
@@ -28,11 +34,10 @@ RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/h
     cd /opt/hermes-agent/ui-tui && \
     npm install --silent --no-fund --no-audit --progress=false && \
     npm run build && \
-    rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
+    rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm /tmp/hermes-commit.json
 
 RUN mkdir -p /data/.hermes /app
 
-COPY Caddyfile.tmpl /app/Caddyfile.tmpl
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
