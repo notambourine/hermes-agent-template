@@ -15,7 +15,7 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 - **Live Logs** — streaming gateway log viewer
 - **User Pairing** — approve or deny users who message your bot, revoke access anytime
 - **Cloudflare Access auth** — identity-bound (Google/GitHub/email magic-link), no public IP, no basic-auth password to manage
-- **Edge-tracking Hermes** — each Railway build pulls Hermes `main`, so upstream features land on next deploy
+- **Release-tracking Hermes** — each Railway build resolves the latest Hermes release tag via the GitHub API and rebuilds when a new one is cut (override with `HERMES_REF=<tag>` to pin)
 
 ## Getting Started
 
