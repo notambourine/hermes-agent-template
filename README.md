@@ -81,6 +81,69 @@ Telegram, Discord, Slack, WhatsApp, Email, Mattermost, Matrix
 
 Parallel (search), Firecrawl (scraping), Tavily (search), FAL (image gen), Browserbase, GitHub, OpenAI Voice (Whisper/TTS), Honcho (memory)
 
+## Cron Jobs
+
+The container ships with [supercronic](https://github.com/aptible/supercronic) so you can run OS-level cron jobs alongside the agent. The crontab file lives on the persistent volume at `/data/crontab` and is re-read on every container boot — no separate "register cron" step, no jobs lost on redeploy.
+
+### How it works
+
+- `start.sh` sources `/data/.hermes/.env` (so cron jobs see the same secrets the gateway uses) and launches `supercronic -passthrough-logs /data/crontab` as a background sibling of the gateway.
+- supercronic logs each invocation to stdout, which Railway captures alongside the gateway's logs.
+- `/data/crontab` is created empty on first boot if it doesn't exist. Edit it via the Railway shell or any file-browser surface you've added.
+
+### Crontab format
+
+Standard 5-field cron syntax. Lines run as `/bin/sh -c '<command>'`, so use full paths and quote shell metacharacters.
+
+```cron
+# Check ShibariDev/shibari-study-partnerships dev branch every 15 min,
+# alert Slack only on a status flip. State persists in /data so the
+# "did this just break?" check survives redeploys.
+*/15 * * * * /data/scripts/check-ci.sh
+```
+
+### Example: CI status flip → Slack webhook (zero LLM tokens)
+
+`/data/scripts/check-ci.sh`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+STATE_FILE="/data/.shibari_ci_state.txt"
+REPO="ShibariDev/shibari-study-partnerships"
+BRANCH="dev"
+
+SHA=$(curl -fsS -H "Authorization: token $SHIBARI_GITHUB_READONLY" \
+  "https://api.github.com/repos/$REPO/commits/$BRANCH" | jq -r '.sha')
+STATUS=$(curl -fsS -H "Authorization: token $SHIBARI_GITHUB_READONLY" \
+  "https://api.github.com/repos/$REPO/commits/$SHA/status" | jq -r '.state')
+
+LAST=$(cat "$STATE_FILE" 2>/dev/null || echo "success")
+
+if [ "$STATUS" = "failure" ] && [ "$LAST" != "failure" ]; then
+  curl -fsS -X POST -H 'Content-type: application/json' \
+    --data "{\"text\":\":rotating_light: $REPO@$BRANCH broke ($SHA)\"}" \
+    "$SLACK_WEBHOOK_URL"
+  echo failure > "$STATE_FILE"
+elif [ "$STATUS" = "success" ] && [ "$LAST" = "failure" ]; then
+  curl -fsS -X POST -H 'Content-type: application/json' \
+    --data "{\"text\":\":white_check_mark: $REPO@$BRANCH is green again\"}" \
+    "$SLACK_WEBHOOK_URL"
+  echo success > "$STATE_FILE"
+fi
+```
+
+Make it executable (`chmod +x /data/scripts/check-ci.sh`) and add the cron line above. Set `SHIBARI_GITHUB_READONLY` and `SLACK_WEBHOOK_URL` in `/data/.hermes/.env` (the dashboard's env editor works) — `start.sh` exports them into supercronic's environment on boot.
+
+### Why supercronic, not `cron`/`crond`
+
+Stock cron daemonizes itself, drops the parent environment, and ships logs through syslog — none of which plays well with `tini` as PID 1 or Railway's stdout-based log pipeline. supercronic is a single static Go binary that runs in the foreground, inherits env from its parent, and writes to stdout. It's the standard container-cron idiom (Aptible, GitLab Runner, Heroku-style buildpacks all use it).
+
+### Hermes-managed schedules vs OS-level cron
+
+Hermes has its own scheduler at `/data/.hermes/cron/` for *agent* tasks — recurring LLM invocations that go through the gateway. Use that when you want an agent to think. Use `/data/crontab` (this section) when you want a shell script to run that explicitly *avoids* the gateway, e.g. status checks that should cost zero tokens unless they fire a notification.
+
 ## Architecture
 
 ```
@@ -89,6 +152,7 @@ Railway Container
 │   ├── /            — Admin dashboard (Basic Auth)
 │   ├── /health      — Health check (no auth)
 │   └── /api/*       — Config, status, logs, gateway, pairing
+├── supercronic      — OS-level cron, reads /data/crontab
 └── hermes gateway   — Managed as async subprocess
 ```
 

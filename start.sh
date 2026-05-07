@@ -33,6 +33,16 @@ hermes dashboard --host 127.0.0.1 --port 9119 --no-open --tui &
 
 caddy run --config /tmp/Caddyfile --adapter caddyfile &
 
+# OS-level cron via supercronic. Crontab lives on the persistent volume so
+# it survives redeploys; supercronic re-reads it on each container boot.
+# Inherit /data/.hermes/.env so cron entries can use the same secrets the
+# gateway uses (e.g. SHIBARI_GITHUB_READONLY, SLACK_WEBHOOK_URL).
+if [ -f /data/.hermes/.env ]; then
+  set -a; . /data/.hermes/.env; set +a
+fi
+[ ! -f /data/crontab ] && touch /data/crontab
+supercronic -passthrough-logs /data/crontab &
+
 # Foreground: tini → start.sh → exec → hermes gateway. SIGTERM reaches the
 # gateway directly so its own shutdown handlers run.
 exec hermes gateway run --replace

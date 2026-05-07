@@ -3,6 +3,9 @@ FROM caddy:2-alpine AS caddy-bin
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 ARG HERMES_REF=v2026.4.30
+ARG SUPERCRONIC_VERSION=v0.2.45
+ARG SUPERCRONIC_SHA256_AMD64=bb6da5af8d5547c9a5cbb4cf58d9f5541f0433df2188bfe4f1a54b04ad253db6
+ARG SUPERCRONIC_SHA256_ARM64=c0f21174f7bb3c80a9b33567ba0cfbeb3e51e765fe9808267ba72a1ac88c3dba
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git tini gnupg && \
@@ -16,6 +19,21 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs gh && \
     rm -rf /var/lib/apt/lists/*
+
+# supercronic: container-native cron. Single static binary, reads a crontab
+# file in the foreground, logs to stdout. Runs as a background sibling of
+# the gateway in start.sh (see "Cron jobs" in README.md).
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sha="$SUPERCRONIC_SHA256_AMD64"; asset="supercronic-linux-amd64" ;; \
+      arm64) sha="$SUPERCRONIC_SHA256_ARM64"; asset="supercronic-linux-arm64" ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /usr/local/bin/supercronic \
+      "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/${asset}"; \
+    echo "${sha}  /usr/local/bin/supercronic" | sha256sum -c -; \
+    chmod +x /usr/local/bin/supercronic
 
 COPY --from=caddy-bin /usr/bin/caddy /usr/local/bin/caddy
 
