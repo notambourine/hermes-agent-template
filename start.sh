@@ -11,7 +11,20 @@ if [ ! -f /data/.hermes/config.yaml ] && [ -f /opt/hermes-agent/cli-config.yaml.
 fi
 [ ! -f /data/.hermes/.env ] && touch /data/.hermes/.env
 
+# `hermes gateway` writes /data/.hermes/gateway.pid on start but does not
+# remove it on SIGTERM. Because /data is a persistent volume, the file
+# survives container restarts (including the Restart Gateway button, which
+# trips `wait -n` and respawns the whole container) and causes every
+# subsequent boot to exit with "ERROR gateway.run: PID file race lost to
+# another gateway instance". No hermes process can be running at this
+# point — we're pre-exec in a fresh container — so removing it is safe.
+rm -f /data/.hermes/gateway.pid
+
 : "${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set — see README for Cloudflare Tunnel setup}"
+
+# Hermes itself defaults this to false; for a public template we flip it.
+# Set HERMES_REDACT_SECRETS=false in Railway Variables to opt back in to verbatim logs for debugging.
+export HERMES_REDACT_SECRETS="${HERMES_REDACT_SECRETS:-true}"
 
 # Three siblings under tini -g. wait -n exits on any child death so Railway
 # restarts the container if any of them dies (cloudflared losing its tunnel,

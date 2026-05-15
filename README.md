@@ -34,7 +34,7 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 You need a Cloudflare account with a domain on Cloudflare's nameservers (free tier is fine). All steps happen in the [Zero Trust dashboard](https://one.dash.cloudflare.com/).
 
 1. **Create a tunnel.** Networks → Tunnels → Create tunnel → Cloudflared. Name it (e.g. `hermes-railway`). Copy the **token** Cloudflare hands you (`eyJhIjoi...`, ~200 chars). This is your `TUNNEL_TOKEN`.
-2. **Add a public hostname** to the tunnel. Public Hostname tab → Add. Pick a subdomain (e.g. `hermes.yourdomain.com`). Service: `HTTP` `localhost:9119`.
+2. **Add a public hostname** to the tunnel. Public Hostname tab → Add. Pick a subdomain (e.g. `hermes.yourdomain.com`). Service: `HTTP` `localhost:9119`. Expand **Additional application settings → HTTP Settings** and set **HTTP Host Header** to `localhost:9119` — the Hermes dashboard checks the `Host:` header against its loopback bind, and Cloudflare passes the browser's Host through unmodified by default; without this override you'll hit `{"detail":"Invalid Host header..."}` after auth.
 3. **Protect it with Access.** Access → Applications → Add application → Self-hosted. Set the application URL to your subdomain. Add a policy: e.g. *Allow* if email matches `you@yourdomain.com`. Save.
 
 That's the one-time setup. The tunnel + hostname + Access policy all live on Cloudflare's side — Railway redeploys reconnect to the same tunnel transparently.
