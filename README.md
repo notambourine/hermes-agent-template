@@ -15,7 +15,7 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 - **Live Logs** — streaming gateway log viewer
 - **User Pairing** — approve or deny users who message your bot, revoke access anytime
 - **Cloudflare Access auth** — identity-bound (Google/GitHub/email magic-link), no public IP, no basic-auth password to manage
-- **Release-tracking Hermes** — each Railway build resolves the latest Hermes release tag via the GitHub API and rebuilds when a new one is cut (override with `HERMES_REF=<tag>` to pin)
+- **Pinned, reviewable upgrades** — the Dockerfile pins a specific Hermes release (`ARG HERMES_REF`); a daily GitHub Action opens a draft PR with the release notes when upstream cuts a new one. Review, merge, and Railway auto-deploys the new version.
 
 ## Getting Started
 
@@ -104,6 +104,14 @@ Parallel (search), Firecrawl (scraping), Tavily (search), FAL (image gen), Brows
 The container has **no public listener**. cloudflared makes an outbound connection to Cloudflare's edge; inbound traffic is delivered through that connection to the dashboard on loopback. Hermes' built-in loopback-only WS defenses are satisfied naturally — no reverse-proxy header gymnastics, no basic-auth shim.
 
 Config persists in `/data/.hermes/`: `.env` (provider/channel secrets), `config.yaml` (gateway config), `sessions/`, `memories/`, `cron/`, etc.
+
+## Upgrading Hermes
+
+The deployed Hermes version is pinned in the Dockerfile (`ARG HERMES_REF=<tag>`) and logged at container boot (`Hermes version: ...` in Railway deploy logs). Upstream uses date-based git tags (`v2026.6.5`) carrying a semver package version (`0.16.0`).
+
+A scheduled workflow ([`hermes-bump.yml`](./.github/workflows/hermes-bump.yml)) checks daily for a new release and opens a draft PR bumping the pin, with the upstream release notes in the PR body. Before merging, scan the notes for changes to the CLI flags `start.sh` uses (`hermes dashboard`, `hermes gateway run`) — a removed flag exits the process at boot and crash-loops the container. Merging the PR triggers Railway's GitHub auto-deploy.
+
+The `/data` volume (config, sessions, memories, cron state) is untouched by upgrades — only the baked-in Hermes code changes, and the Cloudflare tunnel reconnects automatically.
 
 ## Cron jobs
 

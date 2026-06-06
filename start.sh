@@ -26,11 +26,17 @@ rm -f /data/.hermes/gateway.pid
 # Set HERMES_REDACT_SECRETS=false in Railway Variables to opt back in to verbatim logs for debugging.
 export HERMES_REDACT_SECRETS="${HERMES_REDACT_SECRETS:-true}"
 
+# Surface the running Hermes version in Railway deploy logs (the image bakes
+# a pinned release; this is the runtime ground truth).
+echo "Hermes version: $(hermes --version 2>&1 | head -1)"
+
 # Three siblings under tini -g. wait -n exits on any child death so Railway
 # restarts the container if any of them dies (cloudflared losing its tunnel,
 # the dashboard crashing, or the gateway exiting all trigger a fresh boot).
+# NOTE: --tui was removed from `hermes dashboard` in 0.16 (hermes-agent#38591);
+# passing it crash-loops the container on unrecognized-argument exit.
 cloudflared tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
-hermes dashboard --host 127.0.0.1 --port 9119 --no-open --tui &
+hermes dashboard --host 127.0.0.1 --port 9119 --no-open &
 hermes gateway run --replace &
 
 wait -n
