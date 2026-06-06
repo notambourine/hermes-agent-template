@@ -20,17 +20,38 @@ fi
 # point — we're pre-exec in a fresh container — so removing it is safe.
 rm -f /data/.hermes/gateway.pid
 
-: "${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set — see README for Cloudflare Tunnel setup}"
+# Fail fast on missing dashboard credentials. Binding non-loopback without
+# --insecure engages Hermes' fail-closed auth gate: with no provider
+# configured the dashboard would start but lock everyone out, which reads
+# as "site broken" instead of "variable missing".
+: "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:?set in Railway Variables — dashboard login username}"
+if [ -z "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-}" ] && [ -z "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}" ]; then
+  echo "ERROR: set HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH (preferred) or" >&2
+  echo "       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD in Railway Variables." >&2
+  exit 1
+fi
+if [ -z "${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}" ]; then
+  echo "WARN: HERMES_DASHBOARD_BASIC_AUTH_SECRET unset — dashboard logins won't survive container restarts." >&2
+fi
 
 # Hermes itself defaults this to false; for a public template we flip it.
 # Set HERMES_REDACT_SECRETS=false in Railway Variables to opt back in to verbatim logs for debugging.
 export HERMES_REDACT_SECRETS="${HERMES_REDACT_SECRETS:-true}"
 
-# Three siblings under tini -g. wait -n exits on any child death so Railway
-# restarts the container if any of them dies (cloudflared losing its tunnel,
-# the dashboard crashing, or the gateway exiting all trigger a fresh boot).
-cloudflared tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
-hermes dashboard --host 127.0.0.1 --port 9119 --no-open --tui &
+# Surface the running Hermes version in Railway deploy logs (the image bakes
+# a pinned release; this is the runtime ground truth).
+echo "Hermes version: $(hermes --version 2>&1 | head -1)"
+
+# Two siblings under tini -g. wait -n exits on any child death so Railway
+# restarts the container if either dies.
+#
+# Dashboard binds 0.0.0.0:$PORT (Railway injects PORT for the public domain).
+# Non-loopback WITHOUT --insecure engages the gated auth mode: login page,
+# scrypt-verified credentials, per-IP rate limit (10/min), HMAC session
+# cookies, and uvicorn proxy_headers=True so Secure cookies and WS origin
+# checks work behind Railway's TLS-terminating edge.
+# NOTE: --tui was removed from `hermes dashboard` in 0.16 (hermes-agent#38591).
+hermes dashboard --host 0.0.0.0 --port "${PORT:-9119}" --no-open &
 hermes gateway run --replace &
 
 wait -n
