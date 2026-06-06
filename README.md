@@ -1,6 +1,6 @@
 # Hermes Agent — Railway Template
 
-Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway](https://railway.app), fronted by a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) with [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) for identity-based auth on the admin dashboard.
+Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway](https://railway.app). The Hermes web dashboard is served directly on Railway's TLS edge, protected by Hermes' built-in gated auth (scrypt-verified login, rate-limited, HMAC session cookies) — no tunnel, no reverse proxy, no SSH needed to administer it.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/hermes-agent-ai?referralCode=QXdhdr&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
@@ -8,14 +8,10 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 
 ## Features
 
-- **Admin Dashboard** — dark-themed UI to configure providers, channels, tools, and manage the gateway
-- **One-Page Setup** — provider dropdown, checkbox-based channel/tool toggles — no config files to edit
-- **Gateway Management** — start, stop, restart the Hermes gateway from the browser
-- **Live Status** — stat cards for gateway state, uptime, model, and pending pairing requests
-- **Live Logs** — streaming gateway log viewer
-- **User Pairing** — approve or deny users who message your bot, revoke access anytime
-- **Cloudflare Access auth** — identity-bound (Google/GitHub/email magic-link), no public IP, no basic-auth password to manage
-- **Pinned, reviewable upgrades** — the Dockerfile pins a specific Hermes release (`ARG HERMES_REF`); a daily GitHub Action opens a draft PR with the release notes when upstream cuts a new one. Review, merge, and Railway auto-deploys the new version.
+- **Full browser admin, zero shell access** — the Hermes dashboard (0.16+) administers everything remotely: messaging channels, MCP servers, webhooks, user pairing, credentials, memory provider, gateway start/stop/restart, logs, doctor/backup ops
+- **Built-in gated auth** — username/password login with scrypt hashing, per-IP rate limiting, and HMAC-signed session cookies; engages automatically (fail-closed) on a public bind
+- **Keys without prompts** — set provider/channel/tool keys as Railway Variables, or paste them into the dashboard (writes the persistent volume); no interactive CLI setup
+- **Pinned, reviewable upgrades** — the Dockerfile pins a specific Hermes release (`ARG HERMES_REF`); a daily GitHub Action opens a draft PR with the release notes when upstream cuts a new one. Review, merge, and Railway auto-deploys.
 
 ## Getting Started
 
@@ -29,41 +25,38 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 1. Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, copy the **Bot Token**.
 2. Find your Telegram user ID via [@userinfobot](https://t.me/userinfobot).
 
-### 3. Cloudflare Tunnel + Access
-
-You need a Cloudflare account with a domain on Cloudflare's nameservers (free tier is fine). All steps happen in the [Zero Trust dashboard](https://one.dash.cloudflare.com/).
-
-1. **Create a tunnel.** Networks → Tunnels → Create tunnel → Cloudflared. Name it (e.g. `hermes-railway`). Copy the **token** Cloudflare hands you (`eyJhIjoi...`, ~200 chars). This is your `TUNNEL_TOKEN`.
-2. **Add a public hostname** to the tunnel. Public Hostname tab → Add. Pick a subdomain (e.g. `hermes.yourdomain.com`). Service: `HTTP` `localhost:9119`. Expand **Additional application settings → HTTP Settings** and set **HTTP Host Header** to `localhost:9119` — the Hermes dashboard checks the `Host:` header against its loopback bind, and Cloudflare passes the browser's Host through unmodified by default; without this override you'll hit `{"detail":"Invalid Host header..."}` after auth.
-3. **Protect it with Access.** Access → Applications → Add application → Self-hosted. Set the application URL to your subdomain. Add a policy: e.g. *Allow* if email matches `you@yourdomain.com`. Save.
-
-That's the one-time setup. The tunnel + hostname + Access policy all live on Cloudflare's side — Railway redeploys reconnect to the same tunnel transparently.
-
-### 4. Deploy to Railway
+### 3. Deploy to Railway
 
 1. Click **Deploy on Railway** above.
-2. Set environment variable **`TUNNEL_TOKEN`** to the value from step 3.1.
+2. Set the required **Variables**:
+   - `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` — your dashboard login name
+   - `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` — a long random string (or set `..._PASSWORD_HASH` with a precomputed scrypt hash; see [`.env.example`](./.env.example))
+   - `HERMES_DASHBOARD_BASIC_AUTH_SECRET` — `openssl rand -base64 32`; keeps logins valid across redeploys
 3. Attach a **volume** mounted at `/data` (persists Hermes config, sessions, memory, cron schedules).
-4. Wait for the build to finish. The container connects to Cloudflare automatically — no Railway public domain needed (don't enable one).
+4. **Generate a public domain** for the service (Settings → Networking). Railway terminates TLS and proxies to the dashboard.
 
-### 5. Configure in the Admin Dashboard
+### 4. Configure in the Admin Dashboard
 
-1. Open `https://hermes.yourdomain.com`. Cloudflare Access prompts you to authenticate. After you're in, the Hermes dashboard loads.
-2. **LLM Provider** — paste your OpenRouter key, enter the model name.
-3. **Messaging Channel** — paste your Telegram bot token.
-4. **Save & Start.** The gateway boots and your bot goes live.
+1. Open your Railway domain. The Hermes login page loads — sign in with the credentials from step 3.
+2. **Config / Env** — paste your OpenRouter key, set the model. (Or skip this and set `OPENROUTER_API_KEY` + `LLM_MODEL` as Railway Variables in step 3.)
+3. **Channels** — configure Telegram with your bot token, enable it.
+4. Start the gateway from the **System** page if it isn't already running.
 
-### 6. Start chatting
+### 5. Start chatting
 
-Message your Telegram bot. New users appear under **Users** in the dashboard — click **Approve** and they're paired.
+Message your Telegram bot. New users appear in the dashboard's **Pairing** page — approve them and they're paired.
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `TUNNEL_TOKEN` | yes | Cloudflare Tunnel token from the Zero Trust dashboard. The container will refuse to start without it. |
+| `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` | yes | Dashboard login username. The container refuses to start without it. |
+| `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH` | yes* | Precomputed scrypt hash (preferred — no plaintext at rest). |
+| `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | yes* | Plaintext alternative; hashed in-memory at load. *One of the two. |
+| `HERMES_DASHBOARD_BASIC_AUTH_SECRET` | recommended | Session-cookie signing key (`openssl rand -base64 32`). Unset = logins drop on every redeploy. |
+| `HERMES_REDACT_SECRETS` | no | Defaults to `true` here; set `false` for verbatim logs while debugging. |
 
-LLM provider keys, channel tokens, tool API keys, and gateway settings are managed through the admin dashboard (which writes them to `/data/.hermes/.env`). See [`.env.example`](./.env.example) for the full set of optional knobs.
+Provider keys, channel tokens, and tool API keys can be set **either** as Railway Variables (process env) **or** via the dashboard (which writes `/data/.hermes/.env` on the volume). Precedence: the volume `.env` overrides a same-named Railway Variable — pick one home per key. See [`.env.example`](./.env.example) for the full set.
 
 ## Supported Providers
 
@@ -80,28 +73,22 @@ Parallel (search), Firecrawl (scraping), Tavily (search), FAL (image gen), Brows
 ## Architecture
 
 ```
-                     ┌──────────────────────┐
-  user browser ─►   │  Cloudflare Access    │  identity check
-                     │  (Google/GitHub/email)│
-                     └──────────┬───────────┘
-                                │ authorized request
-                                ▼
-                     ┌──────────────────────┐
-                     │  Cloudflare Tunnel   │
-                     └──────────┬───────────┘
-                                │ outbound-only connection
-  ┌─────────────────────────────┼─────────────────────────────┐
-  │  Railway Container          ▼                             │
-  │  ┌─────────────┐   ┌─────────────────┐   ┌─────────────┐  │
-  │  │ cloudflared │──►│ hermes dashboard│   │   hermes    │  │
-  │  │             │   │  127.0.0.1:9119 │   │   gateway   │  │
-  │  └─────────────┘   └─────────────────┘   └─────────────┘  │
-  │                          (loopback)         (foreground)  │
-  └───────────────────────────────────────────────────────────┘
-                       /data volume (persisted)
+  user browser ──HTTPS──►  ┌──────────────────────┐
+                           │  Railway edge (TLS)  │
+                           └──────────┬───────────┘
+                                      │ $PORT
+  ┌───────────────────────────────────┼───────────────────────────┐
+  │  Railway Container                ▼                           │
+  │   ┌───────────────────────────────────────┐  ┌─────────────┐  │
+  │   │ hermes dashboard 0.0.0.0:$PORT        │  │   hermes    │  │
+  │   │ gated auth: login page, scrypt,       │  │   gateway   │  │
+  │   │ per-IP rate limit, HMAC cookies       │  │ (foreground)│  │
+  │   └───────────────────────────────────────┘  └─────────────┘  │
+  └───────────────────────────────────────────────────────────────┘
+                        /data volume (persisted)
 ```
 
-The container has **no public listener**. cloudflared makes an outbound connection to Cloudflare's edge; inbound traffic is delivered through that connection to the dashboard on loopback. Hermes' built-in loopback-only WS defenses are satisfied naturally — no reverse-proxy header gymnastics, no basic-auth shim.
+Binding non-loopback **without** `--insecure` engages Hermes' fail-closed dashboard auth gate: every page and `/api/*` route requires a session, login attempts are rate-limited per client IP, and uvicorn's `proxy_headers` flips on automatically so `Secure` cookies and WebSocket origin checks work correctly behind Railway's TLS-terminating proxy.
 
 Config persists in `/data/.hermes/`: `.env` (provider/channel secrets), `config.yaml` (gateway config), `sessions/`, `memories/`, `cron/`, etc.
 
@@ -111,7 +98,7 @@ The deployed Hermes version is pinned in the Dockerfile (`ARG HERMES_REF=<tag>`)
 
 A scheduled workflow ([`hermes-bump.yml`](./.github/workflows/hermes-bump.yml)) checks daily for a new release and opens a draft PR bumping the pin, with the upstream release notes in the PR body. Before merging, scan the notes for changes to the CLI flags `start.sh` uses (`hermes dashboard`, `hermes gateway run`) — a removed flag exits the process at boot and crash-loops the container. Merging the PR triggers Railway's GitHub auto-deploy.
 
-The `/data` volume (config, sessions, memories, cron state) is untouched by upgrades — only the baked-in Hermes code changes, and the Cloudflare tunnel reconnects automatically.
+The `/data` volume (config, sessions, memories, cron state) is untouched by upgrades — only the baked-in Hermes code changes.
 
 ## Cron jobs
 
@@ -119,18 +106,21 @@ Use Hermes' built-in scheduler with `no_agent=True` for shell scripts that shoul
 
 ## Running Locally
 
-For local dev there's no need for a tunnel — just run Hermes directly:
+For local dev there's no need for the auth gate — just run Hermes directly:
 
 ```bash
 pip install hermes-agent
 hermes dashboard
 ```
 
-Or build and run the container with a tunnel token of your own:
+Or run the container the way Railway does:
 
 ```bash
 docker build -t hermes-agent .
-docker run --rm -it -e TUNNEL_TOKEN=eyJhIjoi... -v hermes-data:/data hermes-agent
+docker run --rm -it -p 9119:9119 \
+  -e HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin \
+  -e HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=dev-only \
+  -v hermes-data:/data hermes-agent
 ```
 
 ## Credits

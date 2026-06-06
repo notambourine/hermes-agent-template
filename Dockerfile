@@ -22,13 +22,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends nodejs gh && \
     rm -rf /var/lib/apt/lists/*
 
-# cloudflared: terminates a Cloudflare Tunnel from inside the container.
-# Connects outbound to Cloudflare's edge, forwards inbound traffic to the
-# Hermes dashboard on 127.0.0.1:9119. Cloudflare Access handles auth.
-RUN curl -fsSLo /usr/local/bin/cloudflared \
-      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture)" && \
-    chmod +x /usr/local/bin/cloudflared
-
 RUN echo "Building against Hermes ${HERMES_REF}" && \
     git clone --depth 1 --branch "${HERMES_REF}" https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \
     cd /opt/hermes-agent && \
