@@ -41,6 +41,11 @@ RUN chmod +x /app/start.sh
 
 ENV HOME=/data
 ENV HERMES_HOME=/data/.hermes
+# Mark the TUI bundle as prebuilt so the dashboard's Chat tab runs `node dist`
+# directly instead of attempting an npm rebuild at runtime (which exits and
+# surfaces as "Chat unavailable" over the PTY websocket). Same fix as the
+# origin template's cb66d07.
+ENV HERMES_TUI_DIR=/opt/hermes-agent/ui-tui
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["/app/start.sh"]
