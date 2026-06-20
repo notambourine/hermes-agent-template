@@ -7,7 +7,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 # --build-arg HERMES_REF=<tag|branch|SHA>.
 # KEY-DECISION 2026-06-06: pin + bump-PR replaces resolve-latest-at-build-time —
 # 0.16 removed the dashboard --tui flag and a blind rebuild would have crash-looped.
-ARG HERMES_REF=v2026.6.5
+ARG HERMES_REF=v2026.6.19
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates git tini gnupg jq && \
