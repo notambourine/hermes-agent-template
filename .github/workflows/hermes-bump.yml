@@ -24,7 +24,11 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Don't bake GITHUB_TOKEN into .git/config (artipacked). The push step
+          # below re-auths explicitly via `gh auth setup-git`.
+          persist-credentials: false
 
       - name: Compare pinned ref to latest release
         id: check
@@ -56,6 +60,11 @@ jobs:
           # Package semver at the new tag (tags are date-based; humans think in semver).
           semver="$(curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${LATEST}/pyproject.toml" \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+
+          # Re-establish push auth dropped by persist-credentials: false. Routes
+          # git's HTTPS auth through the gh credential helper (uses GH_TOKEN),
+          # keeping the token out of .git/config and out of remote URLs.
+          gh auth setup-git
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
