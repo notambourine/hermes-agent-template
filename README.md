@@ -55,6 +55,7 @@ Message your Telegram bot. New users appear in the dashboard's **Pairing** page 
 | `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | yes* | Plaintext alternative; hashed in-memory at load. *One of the two. |
 | `HERMES_DASHBOARD_BASIC_AUTH_SECRET` | recommended | Session-cookie signing key (`openssl rand -base64 32`). Unset = logins drop on every redeploy. |
 | `HERMES_REDACT_SECRETS` | no | Defaults to `true` here; set `false` for verbatim logs while debugging. |
+| `HERMES_MULTIPLEX_PROFILES` | no | Defaults to `true` here. The boot script writes it to `config.yaml` so the single gateway serves every profile (see [Running multiple agents](#running-multiple-agents)). Set `false` to run one profile per Railway service. |
 
 Provider keys, channel tokens, and tool API keys can be set **either** as Railway Variables (process env) **or** via the dashboard (which writes `/data/.hermes/.env` on the volume). Precedence: the volume `.env` overrides a same-named Railway Variable — pick one home per key. See [`.env.example`](./.env.example) for the full set.
 
@@ -103,6 +104,24 @@ The `/data` volume (config, sessions, memories, cron state) is untouched by upgr
 ## Cron jobs
 
 Use Hermes' built-in scheduler with `no_agent=True` for shell scripts that should run without LLM invocation (zero token cost). See [NousResearch/hermes-agent#19709](https://github.com/NousResearch/hermes-agent/pull/19709). Scheduler state lives at `/data/.hermes/cron/` and persists across redeploys via the Railway volume.
+
+## Running multiple agents
+
+This template enables **profile multiplexing** by default (`HERMES_MULTIPLEX_PROFILES=true`), so one Railway service can host several independent agents — each with its own bot tokens, `.env`, sessions, and memory — sharing the one container, volume, and domain. For a handful of low-traffic agents (e.g. one per client or channel) that's cheaper and simpler than standing up a separate service each.
+
+**Add an agent — no shell needed.** From the dashboard, use the profile switcher → **New profile**. Give it a model, a SOUL/personality, and channels with their **own** bot token, then it's live. New profiles land under `/data/.hermes/profiles/<name>/` on the persistent volume, so they survive redeploys and Hermes upgrades.
+
+How the single gateway routes once a profile exists:
+
+- **Default profile** is untouched — `agent:main:…` session namespace, bare `POST /webhooks/<route>`. Existing setups keep working byte-for-byte.
+- **Named profiles** are served at a prefix: `POST https://<your-domain>/p/<name>/webhooks/<route>`. (Polling channels like Telegram need no inbound URL; this matters for webhook channels like Slack/Discord.)
+
+Two constraints the gateway enforces at startup, so know them before you split work across profiles:
+
+- **Each profile needs a unique bot token per platform.** The gateway refuses to start if two profiles share the same `(platform, token)` pair — reusing one Telegram/Discord token across profiles is a hard error, not a silent race.
+- **Only the default profile owns the shared HTTP listener.** A secondary profile that enables a port-binding platform (webhook server, API server) fails fast at boot — configure those on the default profile only.
+
+**Isolation model:** profiles share one process and volume — soft isolation (separate credentials, namespaced sessions/memory), not hard process isolation. To run an **untrusted** or compliance-isolated tenant, deploy this template as a **separate Railway service** (set `HERMES_MULTIPLEX_PROFILES=false`) so it gets its own container, volume, and crash domain.
 
 ## Running Locally
 

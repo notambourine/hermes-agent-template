@@ -4,12 +4,35 @@ set -euo pipefail
 mkdir -p /data/.hermes/cron /data/.hermes/sessions /data/.hermes/logs \
          /data/.hermes/memories /data/.hermes/skills /data/.hermes/pairing \
          /data/.hermes/hooks /data/.hermes/image_cache /data/.hermes/audio_cache \
-         /data/.hermes/workspace
+         /data/.hermes/workspace /data/.hermes/profiles
 
 if [ ! -f /data/.hermes/config.yaml ] && [ -f /opt/hermes-agent/cli-config.yaml.example ]; then
   cp /opt/hermes-agent/cli-config.yaml.example /data/.hermes/config.yaml
 fi
 [ ! -f /data/.hermes/.env ] && touch /data/.hermes/.env
+
+# Multi-profile ready by default. With gateway.multiplex_profiles on, the single
+# gateway this container runs serves EVERY profile under /data/.hermes/profiles/<name>/
+# — each with its own bot tokens, .env, sessions, and memory — through /p/<name>/
+# URL prefixes, while the default profile is untouched (agent:main namespace, bare
+# /webhooks). Create and configure additional agents from the dashboard's profile
+# switcher; no shell access needed.
+#
+# config.yaml is the ONLY control surface for this key: no HERMES_* env var maps to
+# it (gateway/config.py reads multiplex_profiles only from config.yaml) and the
+# dashboard exposes no toggle. Without this line a profile created in the dashboard
+# would exist on disk but the lone gateway would silently never serve it
+# (multiplex_profiles defaults false -> profiles_to_serve() returns only the active
+# profile). We assert it from a Railway-overridable variable each boot so that
+# variable stays the source of truth: set HERMES_MULTIPLEX_PROFILES=false to run one
+# profile per Railway service instead. A removed/renamed CLI verb in a future Hermes
+# bump warns rather than crash-loops the container (cf. the 0.16 --tui lesson).
+if [ "${HERMES_MULTIPLEX_PROFILES:-true}" = "true" ]; then
+  hermes config set gateway.multiplex_profiles true \
+    || echo "WARN: could not enable gateway.multiplex_profiles — verify the 'hermes config set' CLI surface in this release." >&2
+else
+  hermes config set gateway.multiplex_profiles false || true
+fi
 
 # `hermes gateway` writes /data/.hermes/gateway.pid on start but does not
 # remove it on SIGTERM. Because /data is a persistent volume, the file
