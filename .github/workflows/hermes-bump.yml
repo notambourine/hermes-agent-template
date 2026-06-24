@@ -16,15 +16,23 @@ on:
     - cron: "23 13 * * *" # daily, after Nous's usual release window
   workflow_dispatch: {}
 
-permissions:
-  contents: write
-  pull-requests: write
+# Serialize runs so a manual dispatch can't race the scheduled run — both push the
+# same hermes-bump/<tag> branch. Let the in-flight run finish rather than cancel.
+concurrency:
+  group: hermes-release-bump
+  cancel-in-progress: false
+
+# Default-deny at the workflow level; the single job grants exactly what it needs.
+permissions: {}
 
 jobs:
   bump:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the bump branch
+      pull-requests: write # open the draft PR
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Don't bake GITHUB_TOKEN into .git/config (artipacked). The push step
           # below re-auths explicitly via `gh auth setup-git`.
@@ -65,6 +73,15 @@ jobs:
           # git's HTTPS auth through the gh credential helper (uses GH_TOKEN),
           # keeping the token out of .git/config and out of remote URLs.
           gh auth setup-git
+
+          # A merged/closed bump PR can leave its head branch on origin (repos
+          # without auto-delete). The open-PR guard above already ruled out a live
+          # PR, so any hermes-bump/<tag> still here is stale — delete it, else the
+          # push below is a rejected non-fast-forward against the leftover ref.
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+            echo "Deleting stale remote branch ${branch} (no open PR)."
+            git push origin --delete "${branch}"
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
