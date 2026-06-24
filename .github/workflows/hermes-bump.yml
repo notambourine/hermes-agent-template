@@ -74,6 +74,15 @@ jobs:
           # keeping the token out of .git/config and out of remote URLs.
           gh auth setup-git
 
+          # A merged/closed bump PR can leave its head branch on origin (repos
+          # without auto-delete). The open-PR guard above already ruled out a live
+          # PR, so any hermes-bump/<tag> still here is stale — delete it, else the
+          # push below is a rejected non-fast-forward against the leftover ref.
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+            echo "Deleting stale remote branch ${branch} (no open PR)."
+            git push origin --delete "${branch}"
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "${branch}"
