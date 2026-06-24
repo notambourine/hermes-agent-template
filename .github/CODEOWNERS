@@ -1,0 +1,21 @@
+# Code owners. Combined with branch protection ("Require review from Code
+# Owners"), these paths can't merge without @tomfuertes approval.
+#
+# The .claude/ and .github/ entries are a supply-chain control, not just review
+# routing: this is a forkable template, and the config-injection vector is a PR
+# that slips a malicious SessionStart hook into .claude/settings.json or a
+# poisoned workflow into .github/. Gating those paths closes it.
+
+# Default owner for everything not matched below.
+*                       @tomfuertes
+
+# Agent/editor config — config-injection surface.
+/.claude/               @tomfuertes
+
+# CI, automation, and dependency policy.
+/.github/               @tomfuertes
+
+# Deploy-critical: a bad edit here crash-loops the Railway container.
+/Dockerfile             @tomfuertes
+/start.sh               @tomfuertes
+/railway.toml           @tomfuertes
