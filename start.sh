@@ -34,14 +34,34 @@ else
   hermes config set gateway.multiplex_profiles false || true
 fi
 
-# `hermes gateway` writes /data/.hermes/gateway.pid on start but does not
-# remove it on SIGTERM. Because /data is a persistent volume, the file
-# survives container restarts (including the Restart Gateway button, which
-# trips `wait -n` and respawns the whole container) and causes every
-# subsequent boot to exit with "ERROR gateway.run: PID file race lost to
-# another gateway instance". No hermes process can be running at this
-# point — we're pre-exec in a fresh container — so removing it is safe.
-rm -f /data/.hermes/gateway.pid
+# Clear ALL stale single-instance gateway state from the previous container.
+#
+# The dashboard's "Restart Gateway" button runs `hermes gateway restart`, which
+# SIGTERMs the running gateway. That gateway is start.sh's `wait -n` child, so its
+# death ends PID 1 and Railway restarts the whole container — which is fine and
+# Railway-aligned (let the platform supervise; we don't hand-roll one). The
+# problem was the NEXT boot crash-looping with "PID file race lost to another
+# gateway instance": `hermes gateway` writes state under HERMES_HOME on the /data
+# volume and does NOT clean it on SIGTERM/SIGKILL, so the survivors persist across
+# the restart. Clearing only gateway.pid wasn't enough — gateway/status.py's
+# get_running_pid() falls back to gateway_state.json when the pid file is absent,
+# so a hard-killed container leaves that file claiming "running" and the fresh
+# gateway loses the race. Clear the whole set (paths from gateway/status.py):
+#   gateway.pid                  PID file
+#   gateway.lock                 runtime mutual-exclusion lock (fcntl auto-releases
+#                                on death, but remove the file for tidiness)
+#   gateway_state.json           persisted runtime status — the real culprit
+#   .gateway-takeover.json       --replace handoff marker
+#   .gateway-planned-stop.json   planned-stop marker
+# We're pre-exec in a fresh container — no hermes process can be running — so every
+# one of these is stale by definition and safe to remove. (Multiplex serves all
+# profiles from this one gateway, so its state is here at HERMES_HOME, not per
+# profile.)
+rm -f /data/.hermes/gateway.pid \
+      /data/.hermes/gateway.lock \
+      /data/.hermes/gateway_state.json \
+      /data/.hermes/.gateway-takeover.json \
+      /data/.hermes/.gateway-planned-stop.json
 
 # Fail fast on missing dashboard credentials. Binding non-loopback without
 # --insecure engages Hermes' fail-closed auth gate: with no provider
