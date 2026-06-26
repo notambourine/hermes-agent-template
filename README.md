@@ -105,6 +105,41 @@ The `/data` volume (config, sessions, memories, cron state) is untouched by upgr
 
 Use Hermes' built-in scheduler with `no_agent=True` for shell scripts that should run without LLM invocation (zero token cost). See [NousResearch/hermes-agent#19709](https://github.com/NousResearch/hermes-agent/pull/19709). Scheduler state lives at `/data/.hermes/cron/` and persists across redeploys via the Railway volume.
 
+Cron jobs can also be **declared in git** via the baked skills repo (next section) — they're reconciled into the scheduler at every boot, idempotently.
+
+## Baked skills & scheduled jobs (`hermes-skills` repo)
+
+This template bakes a team-shared repo — [`notambourine/hermes-skills`](https://github.com/notambourine/hermes-skills) — into the image as read-only content, giving you version-controlled [Agent Skills](https://agentskills.io) and cron jobs without touching the persistent volume.
+
+```
+hermes-skills/
+  skills/<name>/SKILL.md   # registered as a read-only discovery root
+  scripts/*.sh | *.py      # copied to /data/.hermes/scripts/ for cron --script
+  crons.json               # declarative scheduled jobs, reconciled each boot
+```
+
+**Build-time dependency.** The Dockerfile clones the repo at build (`ARG HERMES_SKILLS_REF=main`, overridable to a tag/branch/SHA for pinning). The repo **must exist and be pushed** before a build will succeed — a missing or private repo fails the clone loudly rather than silently shipping no skills.
+
+**Skills are read-only and the volume is untouched.** At boot, `start.sh` registers `/opt/hermes-skills/skills` into `config.yaml` under `skills.external_dirs` — an *extra* discovery root Hermes scans alongside the volume's `$HERMES_HOME/skills`. Repo skills stay immutable image content; agent- and dashboard-authored skills keep living on `/data` and are never clobbered by a redeploy. The `skills.external_dirs` key is owned by this template and re-asserted idempotently on every boot.
+
+> Why a YAML rewrite and not `hermes config set`? `external_dirs` must be a YAML **list**, but `hermes config set` only coerces `bool`/`int`/`float` — a JSON list literal would be stored as a string. `start.sh` writes the key with a tiny PyYAML snippet (PyYAML is a hard Hermes dependency) so the value is a real list.
+
+**Cron scripts** in `scripts/` are copied to `/data/.hermes/scripts/` on boot (where `hermes cron --script` resolves paths). They're treated as code, not user data, so a redeploy overwrites them. `.sh`/`.bash` run via bash; any other extension runs via Python. A TypeScript job must therefore be a `.sh` wrapper that calls `node`/`npx tsx` — the image ships Node 22.
+
+**`crons.json`** is reconciled into the scheduler at every boot. Each entry maps to a `hermes cron create` invocation:
+
+```jsonc
+{ "jobs": [
+  { "name": "disk-watch",  "schedule": "every 2h",  "script": "disk_watch.sh", "no_agent": true, "deliver": "telegram" },
+  { "name": "daily-digest","schedule": "0 9 * * *", "prompt": "Summarize overnight activity",
+    "skills": ["summarize"], "repeat": 30 }
+]}
+```
+
+Field mapping: `no_agent` → `--no-agent`, `script` → `--script`, each `skills[]` entry → a repeated `--skill`, `prompt` → positional, `deliver` → `--deliver`, `repeat` → `--repeat`. Schedules accept `"30m"`, `"every 2h"`, cron expressions (`"0 9 * * *"`), or `"+90s"`.
+
+Reconciliation is **idempotent by job name**: Hermes' `cron create` does not dedupe (it appends with a random id), so `start.sh` skips any job whose `name` already appears in `hermes cron list`. A single malformed entry logs a `WARN` and is skipped — it never crash-loops the container.
+
 ## Running multiple agents
 
 This template enables **profile multiplexing** by default (`HERMES_MULTIPLEX_PROFILES=true`), so one Railway service can host several independent agents — each with its own bot tokens, `.env`, sessions, and memory — sharing the one container, volume, and domain. For a handful of low-traffic agents (e.g. one per client or channel) that's cheaper and simpler than standing up a separate service each.

@@ -34,6 +34,25 @@ RUN echo "Building against Hermes ${HERMES_REF}" && \
     npm run build && \
     rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
 
+# Bake the team-shared skills + cron repo as a READ-ONLY image layer, separate
+# from the Hermes build above so editing skills never busts the (expensive)
+# Hermes clone+compile cache. start.sh registers /opt/hermes-skills/skills via
+# config.yaml's `skills.external_dirs` — an extra discovery root that Hermes
+# scans alongside the volume's $HERMES_HOME/skills. The volume is never written
+# by this: repo skills stay immutable image content, while agent/dashboard-
+# authored skills keep living on /data. Cron scripts are copied onto the volume
+# at boot (they must sit under ~/.hermes/scripts/ for `hermes cron --script`).
+# KEY-DECISION 2026-06-26: external_dirs (read-only) over copying into the volume
+# so a redeploy can never clobber user-authored skills, and the repo stays the
+# single source of truth — bump HERMES_SKILLS_REF to pin/roll skills independently.
+# The repo (github.com/notambourine/hermes-skills) MUST exist and be pushed
+# before a build succeeds; a missing/private repo fails the clone (and the build)
+# loudly rather than silently shipping no skills.
+ARG HERMES_SKILLS_REF=main
+RUN git clone --depth 1 --branch "${HERMES_SKILLS_REF}" \
+      https://github.com/notambourine/hermes-skills.git /opt/hermes-skills && \
+    rm -rf /opt/hermes-skills/.git
+
 RUN mkdir -p /data/.hermes /app
 
 COPY start.sh /app/start.sh
