@@ -62,7 +62,7 @@ fi
 export HERMES_REDACT_SECRETS="${HERMES_REDACT_SECRETS:-true}"
 
 # Surface the running Hermes version in Railway deploy logs (the image bakes
-# a pinned release; this is the runtime ground truth).
+# whichever release was latest at build time; this is the runtime ground truth).
 echo "Hermes version: $(hermes --version 2>&1 | head -1)"
 
 # Two siblings under tini -g. wait -n exits on any child death so Railway

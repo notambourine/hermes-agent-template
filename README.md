@@ -11,7 +11,7 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on [Railway]
 - **Full browser admin, zero shell access** — the Hermes dashboard (0.16+) administers everything remotely: messaging channels, MCP servers, webhooks, user pairing, credentials, memory provider, gateway start/stop/restart, logs, doctor/backup ops
 - **Built-in gated auth** — username/password login with scrypt hashing, per-IP rate limiting, and HMAC-signed session cookies; engages automatically (fail-closed) on a public bind
 - **Keys without prompts** — set provider/channel/tool keys as Railway Variables, or paste them into the dashboard (writes the persistent volume); no interactive CLI setup
-- **Pinned, reviewable upgrades** — the Dockerfile pins a specific Hermes release (`ARG HERMES_REF`); a daily GitHub Action opens a draft PR with the release notes when upstream cuts a new one. Review, merge, and Railway auto-deploys.
+- **Latest-release tracking, one-click upgrade** — the Dockerfile resolves and clones the newest Hermes release at build time; click **Redeploy** in Railway to pull it (a cache-bust ensures the rebuild actually fetches new code). Pin a specific release for a build with `--build-arg HERMES_REF=<tag>`.
 
 ## Getting Started
 
@@ -95,9 +95,11 @@ Config persists in `/data/.hermes/`: `.env` (provider/channel secrets), `config.
 
 ## Upgrading Hermes
 
-The deployed Hermes version is pinned in the Dockerfile (`ARG HERMES_REF=<tag>`) and logged at container boot (`Hermes version: ...` in Railway deploy logs). Upstream uses date-based git tags (`v2026.6.5`) carrying a semver package version (`0.16.0`).
+The image **tracks the latest Hermes release** — it is not pinned. At build time the Dockerfile fetches `releases/latest` from GitHub and clones that tag; the running version is logged at container boot (`Hermes version: ...` in Railway deploy logs). Upstream uses date-based git tags (`v2026.6.5`) carrying a semver package version (`0.17.0`).
 
-A scheduled workflow ([`hermes-bump.yml`](./.github/workflows/hermes-bump.yml)) checks daily for a new release and opens a draft PR bumping the pin, with the upstream release notes in the PR body. Before merging, scan the notes for changes to the CLI flags `start.sh` uses (`hermes dashboard`, `hermes gateway run`) — a removed flag exits the process at boot and crash-loops the container. Merging the PR triggers Railway's GitHub auto-deploy.
+**To upgrade, click Redeploy in Railway.** A redeploy rebuilds the image; the `ADD https://api.github.com/.../releases/latest` line re-fetches the release metadata and busts the clone layer's cache **only when a new release exists**, so you get the newest release without a code change. (Without that cache-bust, Docker would reuse the stale clone layer and redeploy the same commit — the cache-bust is what makes "just redeploy" work.)
+
+> ⚠️ **No changelog gate.** Because there is no pin-bump PR, you don't review release notes before deploying. If a release removes a CLI flag `start.sh` uses (`hermes dashboard`, `hermes gateway run`) — as 0.16 did with `--tui` — the container can crash-loop on boot; watch the deploy log after a redeploy. To deploy a *specific* release instead of latest, build with `--build-arg HERMES_REF=<tag>` (or set it in Railway's build args). Skim the [release notes](https://github.com/NousResearch/hermes-agent/releases) before redeploying if you want the old gate back.
 
 The `/data` volume (config, sessions, memories, cron state) is untouched by upgrades — only the baked-in Hermes code changes.
 
