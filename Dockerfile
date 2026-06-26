@@ -34,25 +34,19 @@ RUN echo "Building against Hermes ${HERMES_REF}" && \
     npm run build && \
     rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
 
-# Bake the team-shared skills repo as a READ-ONLY image layer, separate from the
-# Hermes build above so editing skills never busts the (expensive) Hermes
-# clone+compile cache. start.sh registers /opt/hermes-skills/skills via
-# config.yaml's `skills.external_dirs` — an extra discovery root that Hermes
-# scans alongside the volume's $HERMES_HOME/skills. The volume is never written
-# by this: repo skills stay immutable image content, while agent/dashboard-
-# authored skills keep living on /data. Cron jobs are NOT created here — a skill
-# that wants one ships an install reference and the agent runs `hermes cron
-# create` on request (see the hermes-skills README).
-# KEY-DECISION 2026-06-26: external_dirs (read-only) over copying into the volume
-# so a redeploy can never clobber user-authored skills, and the repo stays the
-# single source of truth — bump HERMES_SKILLS_REF to pin/roll skills independently.
-# The repo (github.com/notambourine/hermes-skills) MUST exist and be pushed
-# before a build succeeds; a missing/private repo fails the clone (and the build)
-# loudly rather than silently shipping no skills.
-ARG HERMES_SKILLS_REF=main
-RUN git clone --depth 1 --branch "${HERMES_SKILLS_REF}" \
-      https://github.com/notambourine/hermes-skills.git /opt/hermes-skills && \
-    rm -rf /opt/hermes-skills/.git
+# NOTE: the team-shared skills repo (github.com/notambourine/hermes-skills) is
+# NOT baked into the image. start.sh clones it into the /data volume at boot and
+# refreshes it on every restart, so a push to hermes-skills reaches the agent
+# WITHOUT an image rebuild, and the `update-ntb-skills` skill can `git pull` it
+# mid-session. A baked layer would be immutable (no in-place pull) and would
+# freeze skills at image-build time. `git` is already installed above.
+# KEY-DECISION 2026-06-26: runtime clone into /data over a build-time image layer
+# so new/changed skills auto-update on restart (and on-demand via a skill) with
+# no template rebuild; the hermes-skills repo stays the single source of truth.
+# Defaults for the runtime clone (override via Railway Variables):
+ENV HERMES_SKILLS_REPO=https://github.com/notambourine/hermes-skills.git
+ENV HERMES_SKILLS_REF=main
+ENV HERMES_SKILLS_DIR=/data/.hermes/external-skills
 
 RUN mkdir -p /data/.hermes /app
 

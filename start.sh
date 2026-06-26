@@ -63,34 +63,43 @@ rm -f /data/.hermes/gateway.pid \
       /data/.hermes/.gateway-takeover.json \
       /data/.hermes/.gateway-planned-stop.json
 
-# ── Import read-only skills from the /opt/hermes-skills image layer ────────────
-# The Dockerfile clones github.com/notambourine/hermes-skills to /opt/hermes-skills.
-# We register its skills/ dir as an EXTERNAL (read-only) discovery root so the
-# agent can use those skills; we never create cron jobs here. A skill that wants a
-# recurring job ships its own install reference and the agent runs `hermes cron
-# create` on request (see the hermes-skills README) — cron creation belongs in a
-# real turn, not container boot.
+# ── Acquire team skills from hermes-skills into the /data volume ───────────────
+# These come from github.com/notambourine/hermes-skills as READ-ONLY external
+# skills. We clone into the writable volume (NOT a baked image layer) so a push
+# to that repo reaches the agent without an image rebuild: first boot clones,
+# every later boot fast-forwards to the latest ref. Mid-session refresh without a
+# restart is the `update-ntb-skills` skill (git pull in a real turn) — the same
+# "mutate in a real turn, not at boot" principle we apply to cron creation.
 #
-# config.yaml's `skills.external_dirs` is owned by this template: agent/skill_utils.py
-# get_external_skills_dirs() reads it as a YAML LIST, so we must store a real list.
-# `hermes config set` only coerces bool/int/float (config.py set_config_value); a
-# JSON list literal would be stored as a string, so we rewrite the key with pyyaml
-# (a hard Hermes dependency). Hermes auto-skips the volume's own skills dir, so this
-# only ADDS the repo root — user-/dashboard-authored skills on /data are untouched.
-# Idempotent each boot; never writes the repo back. A failure warns rather than
-# crash-looping the container.
-if [ -d /opt/hermes-skills/skills ]; then
-  python3 - <<'PY' || echo "WARN: could not register skills.external_dirs — repo skills will not load." >&2
-import yaml, pathlib
-cfg_path = pathlib.Path("/data/.hermes/config.yaml")
-cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
-if not isinstance(cfg, dict):
-    cfg = {}
-cfg.setdefault("skills", {})
-# Template-owned: assert exactly this one external root each boot (idempotent).
-cfg["skills"]["external_dirs"] = ["/opt/hermes-skills/skills"]
-cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-PY
+# Both clone and refresh are NON-FATAL: a network blip leaves the prior checkout
+# (or no skills) but never crash-loops the container. The checkout is a read-only
+# mirror we never commit to, so `reset --hard` is the correct refresh — it tracks
+# the remote ref cleanly even across a force-push or rebased history.
+SKILLS_REPO="${HERMES_SKILLS_REPO:-https://github.com/notambourine/hermes-skills.git}"
+SKILLS_REF="${HERMES_SKILLS_REF:-main}"
+SKILLS_DIR="${HERMES_SKILLS_DIR:-/data/.hermes/external-skills}"
+# Export the resolved values so the update-ntb-skills skill pulls the same
+# checkout/ref this boot used, even if the env vars were unset.
+export HERMES_SKILLS_DIR="$SKILLS_DIR" HERMES_SKILLS_REF="$SKILLS_REF"
+if [ -d "$SKILLS_DIR/.git" ]; then
+  git -C "$SKILLS_DIR" fetch --depth 1 origin "$SKILLS_REF" \
+    && git -C "$SKILLS_DIR" reset --hard FETCH_HEAD \
+    || echo "WARN: could not refresh $SKILLS_DIR — using the existing checkout." >&2
+else
+  git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" "$SKILLS_DIR" \
+    || echo "WARN: could not clone $SKILLS_REPO — team skills will not load this boot." >&2
+fi
+
+# Register the repo's skills/ as an EXTERNAL (read-only) discovery root. Hermes'
+# agent/skill_utils.py get_external_skills_dirs() coerces a bare string to a
+# one-element list and skips the volume's own skills dir, so this only ADDS the
+# repo root — user-/dashboard-authored skills on /data are untouched. (`hermes
+# config set` only coerces bool/int/float, but a plain path string stays a string,
+# which is exactly what get_external_skills_dirs() expects.) A failure warns
+# rather than crash-looping the container.
+if [ -d "$SKILLS_DIR/skills" ]; then
+  hermes config set skills.external_dirs "$SKILLS_DIR/skills" \
+    || echo "WARN: could not register skills.external_dirs — team skills will not load." >&2
 fi
 
 # Fail fast on missing dashboard credentials. Binding non-loopback without
