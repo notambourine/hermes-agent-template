@@ -63,6 +63,45 @@ rm -f /data/.hermes/gateway.pid \
       /data/.hermes/.gateway-takeover.json \
       /data/.hermes/.gateway-planned-stop.json
 
+# ── Acquire team skills from hermes-skills into the /data volume ───────────────
+# These come from github.com/notambourine/hermes-skills as READ-ONLY external
+# skills. We clone into the writable volume (NOT a baked image layer) so a push
+# to that repo reaches the agent without an image rebuild: first boot clones,
+# every later boot fast-forwards to the latest ref. Mid-session refresh without a
+# restart is the `update-ntb-skills` skill (git pull in a real turn) — the same
+# "mutate in a real turn, not at boot" principle we apply to cron creation.
+#
+# Both clone and refresh are NON-FATAL: a network blip leaves the prior checkout
+# (or no skills) but never crash-loops the container. The checkout is a read-only
+# mirror we never commit to, so `reset --hard` is the correct refresh — it tracks
+# the remote ref cleanly even across a force-push or rebased history.
+SKILLS_REPO="${HERMES_SKILLS_REPO:-https://github.com/notambourine/hermes-skills.git}"
+SKILLS_REF="${HERMES_SKILLS_REF:-main}"
+SKILLS_DIR="${HERMES_SKILLS_DIR:-/data/.hermes/external-skills}"
+# Export the resolved values so the update-ntb-skills skill pulls the same
+# checkout/ref this boot used, even if the env vars were unset.
+export HERMES_SKILLS_DIR="$SKILLS_DIR" HERMES_SKILLS_REF="$SKILLS_REF"
+if [ -d "$SKILLS_DIR/.git" ]; then
+  git -C "$SKILLS_DIR" fetch --depth 1 origin "$SKILLS_REF" \
+    && git -C "$SKILLS_DIR" reset --hard FETCH_HEAD \
+    || echo "WARN: could not refresh $SKILLS_DIR — using the existing checkout." >&2
+else
+  git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" "$SKILLS_DIR" \
+    || echo "WARN: could not clone $SKILLS_REPO — team skills will not load this boot." >&2
+fi
+
+# Register the repo's skills/ as an EXTERNAL (read-only) discovery root. Hermes'
+# agent/skill_utils.py get_external_skills_dirs() coerces a bare string to a
+# one-element list and skips the volume's own skills dir, so this only ADDS the
+# repo root — user-/dashboard-authored skills on /data are untouched. (`hermes
+# config set` only coerces bool/int/float, but a plain path string stays a string,
+# which is exactly what get_external_skills_dirs() expects.) A failure warns
+# rather than crash-looping the container.
+if [ -d "$SKILLS_DIR/skills" ]; then
+  hermes config set skills.external_dirs "$SKILLS_DIR/skills" \
+    || echo "WARN: could not register skills.external_dirs — team skills will not load." >&2
+fi
+
 # Fail fast on missing dashboard credentials. Binding non-loopback without
 # --insecure engages Hermes' fail-closed auth gate: with no provider
 # configured the dashboard would start but lock everyone out, which reads

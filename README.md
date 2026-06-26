@@ -105,6 +105,27 @@ The `/data` volume (config, sessions, memories, cron state) is untouched by upgr
 
 Use Hermes' built-in scheduler with `no_agent=True` for shell scripts that should run without LLM invocation (zero token cost). See [NousResearch/hermes-agent#19709](https://github.com/NousResearch/hermes-agent/pull/19709). Scheduler state lives at `/data/.hermes/cron/` and persists across redeploys via the Railway volume.
 
+A skill can teach the agent to set one up: it ships an install reference and the agent runs `hermes cron create` when you ask (see the next section), so cron creation happens in a real turn rather than at container boot.
+
+## Team skills (`hermes-skills` repo)
+
+The agent loads a team-shared repo — [`notambourine/hermes-skills`](https://github.com/notambourine/hermes-skills) — as read-only [Agent Skills](https://agentskills.io), giving you a version-controlled skill library without touching the persistent volume. Skills are authored there with a capable model and reviewed in PRs; the Hermes runtime model only *consumes* them.
+
+```
+hermes-skills/
+  skills/<name>/SKILL.md   # registered as a read-only discovery root
+            references/    # loaded on demand (progressive disclosure)
+            assets/        # scripts/templates a skill ships (e.g. a cron body)
+```
+
+**Acquired at runtime, not baked — so skills auto-update.** `start.sh` clones the repo into the volume at `$HERMES_SKILLS_DIR` (`/data/.hermes/external-skills`) on first boot and fast-forwards it on every later boot. A push to `hermes-skills` reaches the agent on its **next restart** — no image rebuild. (The dashboard's *Restart Gateway* triggers a full Railway container restart, so it doubles as a "pull latest skills" button.) Override `HERMES_SKILLS_REPO` / `HERMES_SKILLS_REF` in Railway Variables to track a fork, tag, or branch. Both clone and refresh are non-fatal: a network blip leaves the prior checkout rather than crash-looping the container.
+
+**Update on demand — `@agent update ntb skills`.** The `update-ntb-skills` skill (shipped in the repo) `git pull`s the checkout in a real turn, so you can refresh mid-session without a restart. Changes are picked up on the next tool-registry scan; *Restart Gateway* forces an immediate clean re-scan.
+
+**Skills are read-only and the volume is untouched.** `start.sh` registers `$HERMES_SKILLS_DIR/skills` into `config.yaml` under `skills.external_dirs` — an *extra* discovery root Hermes scans alongside the volume's own `$HERMES_HOME/skills`. Hermes (`agent/skill_utils.py::get_external_skills_dirs()`) skips the local skills dir, so agent- and dashboard-authored skills on `/data` are never clobbered. A bare path string is stored (Hermes coerces it to a one-element list), so no YAML gymnastics are needed.
+
+**Cron jobs are agent-installed, not baked.** The template never creates cron jobs. A skill that benefits from a recurring job ships the script under its `assets/` and an install reference; the agent copies it to `/data/.hermes/scripts/` and runs `hermes cron create` **only when you ask**. See `skills/disk-watchdog/` in the repo for the pattern. (TypeScript bodies must be `.sh`-wrapped — Hermes runs non-`.sh` scripts via Python; the image ships Node 22.)
+
 ## Running multiple agents
 
 This template enables **profile multiplexing** by default (`HERMES_MULTIPLEX_PROFILES=true`), so one Railway service can host several independent agents — each with its own bot tokens, `.env`, sessions, and memory — sharing the one container, volume, and domain. For a handful of low-traffic agents (e.g. one per client or channel) that's cheaper and simpler than standing up a separate service each.
