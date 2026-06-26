@@ -43,20 +43,24 @@ fi
 # point — we're pre-exec in a fresh container — so removing it is safe.
 rm -f /data/.hermes/gateway.pid
 
-# ── Baked skills + cron from the read-only /opt/hermes-skills image layer ──────
+# ── Import read-only skills from the /opt/hermes-skills image layer ────────────
 # The Dockerfile clones github.com/notambourine/hermes-skills to /opt/hermes-skills.
-# Everything below is idempotent each boot and never writes the repo back, so a
-# bad entry warns instead of crash-looping the container (cf. the 0.16 --tui lesson).
-if [ -d /opt/hermes-skills ]; then
-  # Register the repo's skills dir as an EXTERNAL (read-only) discovery root.
-  # config.yaml's `skills.external_dirs` is owned by this template: agent/skill_utils.py
-  # get_external_skills_dirs() reads it as a YAML LIST, so we must store a real list.
-  # `hermes config set` only coerces bool/int/float (config.py set_config_value);
-  # a JSON list literal would be stored as a string, so we rewrite the key with
-  # pyyaml (a hard Hermes dependency). The volume's own skills dir is auto-skipped
-  # by Hermes, so this only ADDS the repo root — user-authored skills are untouched.
-  if [ -d /opt/hermes-skills/skills ]; then
-    python3 - <<'PY' || echo "WARN: could not register skills.external_dirs — repo skills will not load." >&2
+# We register its skills/ dir as an EXTERNAL (read-only) discovery root so the
+# agent can use those skills; we never create cron jobs here. A skill that wants a
+# recurring job ships its own install reference and the agent runs `hermes cron
+# create` on request (see the hermes-skills README) — cron creation belongs in a
+# real turn, not container boot.
+#
+# config.yaml's `skills.external_dirs` is owned by this template: agent/skill_utils.py
+# get_external_skills_dirs() reads it as a YAML LIST, so we must store a real list.
+# `hermes config set` only coerces bool/int/float (config.py set_config_value); a
+# JSON list literal would be stored as a string, so we rewrite the key with pyyaml
+# (a hard Hermes dependency). Hermes auto-skips the volume's own skills dir, so this
+# only ADDS the repo root — user-/dashboard-authored skills on /data are untouched.
+# Idempotent each boot; never writes the repo back. A failure warns rather than
+# crash-looping the container.
+if [ -d /opt/hermes-skills/skills ]; then
+  python3 - <<'PY' || echo "WARN: could not register skills.external_dirs — repo skills will not load." >&2
 import yaml, pathlib
 cfg_path = pathlib.Path("/data/.hermes/config.yaml")
 cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
@@ -67,61 +71,6 @@ cfg.setdefault("skills", {})
 cfg["skills"]["external_dirs"] = ["/opt/hermes-skills/skills"]
 cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
-  fi
-
-  # Cron scripts must live under ~/.hermes/scripts/ for `hermes cron --script`.
-  # These are code, not user data, so overwriting on every boot is correct.
-  if [ -d /opt/hermes-skills/scripts ]; then
-    mkdir -p /data/.hermes/scripts
-    cp -a /opt/hermes-skills/scripts/. /data/.hermes/scripts/ \
-      || echo "WARN: failed to copy cron scripts onto the volume." >&2
-  fi
-
-  # Reconcile crons.json → `hermes cron create`. cron/jobs.py does NOT dedupe by
-  # name (random uuid per create), so a blind create on every boot piles up dupes.
-  # Guard: skip any job whose .name already appears in `hermes cron list`. A single
-  # bad job warns and is skipped — never fatal.
-  if [ -f /opt/hermes-skills/crons.json ]; then
-    existing="$(hermes cron list --all 2>/dev/null || true)"
-    job_count="$(jq '.jobs | length' /opt/hermes-skills/crons.json 2>/dev/null || echo 0)"
-    i=0
-    while [ "$i" -lt "$job_count" ]; do
-      job="$(jq -c ".jobs[$i]" /opt/hermes-skills/crons.json)"
-      i=$((i + 1))
-      name="$(printf '%s' "$job" | jq -r '.name // empty')"
-      schedule="$(printf '%s' "$job" | jq -r '.schedule // empty')"
-      if [ -z "$name" ] || [ -z "$schedule" ]; then
-        echo "WARN: cron entry $i missing name/schedule — skipping." >&2
-        continue
-      fi
-      # Skip-if-exists: the idempotency guard against duplicate jobs. Match the
-      # whole "    Name:      <name>" line (cron.py prints 6 spaces after the
-      # colon) so a job named "foo" can't be mistaken for an existing "foobar".
-      if printf '%s\n' "$existing" | grep -qxF "    Name:      $name"; then
-        continue
-      fi
-      # Build the argv. --name/--deliver/--repeat/--script/--no-agent map 1:1;
-      # each skills[] entry becomes a repeated --skill; prompt is positional.
-      set -- "$schedule"
-      prompt="$(printf '%s' "$job" | jq -r '.prompt // empty')"
-      [ -n "$prompt" ] && set -- "$@" "$prompt"
-      set -- "$@" --name "$name"
-      script="$(printf '%s' "$job" | jq -r '.script // empty')"
-      [ -n "$script" ] && set -- "$@" --script "$script"
-      [ "$(printf '%s' "$job" | jq -r '.no_agent // false')" = "true" ] && set -- "$@" --no-agent
-      deliver="$(printf '%s' "$job" | jq -r '.deliver // empty')"
-      [ -n "$deliver" ] && set -- "$@" --deliver "$deliver"
-      repeat="$(printf '%s' "$job" | jq -r '.repeat // empty')"
-      [ -n "$repeat" ] && set -- "$@" --repeat "$repeat"
-      while IFS= read -r skill; do
-        [ -n "$skill" ] && set -- "$@" --skill "$skill"
-      done <<EOF
-$(printf '%s' "$job" | jq -r '.skills[]? // empty')
-EOF
-      hermes cron create "$@" \
-        || echo "WARN: failed to create cron job '$name' — skipping." >&2
-    done
-  fi
 fi
 
 # Fail fast on missing dashboard credentials. Binding non-loopback without
