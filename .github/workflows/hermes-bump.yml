@@ -3,8 +3,10 @@
 # body. Merging the PR triggers Railway's GitHub auto-deploy, which rebuilds the
 # image against the new tag.
 #
-# Requires: Settings → Actions → General → "Allow GitHub Actions to create and
-# approve pull requests" enabled on this repo.
+# Requires: BUMP_PR_TOKEN repo secret — a fine-grained PAT scoped to this repo
+# with Contents: read/write and Pull requests: read/write. The notambourine org
+# policy blocks GITHUB_TOKEN from creating PRs, so the built-in token can't open
+# the bump PR.
 #
 # Security note: tag names and release bodies come from the upstream repo (third-
 # party input). They are passed through env vars / files, never interpolated into
@@ -22,15 +24,13 @@ concurrency:
   group: hermes-release-bump
   cancel-in-progress: false
 
-# Default-deny at the workflow level; the single job grants exactly what it needs.
+# All git/API auth goes through the BUMP_PR_TOKEN PAT (org policy blocks
+# GITHUB_TOKEN from creating PRs), so the built-in token gets no grants at all.
 permissions: {}
 
 jobs:
   bump:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # push the bump branch
-      pull-requests: write # open the draft PR
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -41,7 +41,7 @@ jobs:
       - name: Compare pinned ref to latest release
         id: check
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.BUMP_PR_TOKEN }}
         run: |
           current="$(sed -n 's/^ARG HERMES_REF=//p' Dockerfile)"
           latest="$(gh api repos/NousResearch/hermes-agent/releases/latest --jq .tag_name)"
@@ -54,7 +54,7 @@ jobs:
       - name: Open draft bump PR
         if: steps.check.outputs.current != steps.check.outputs.latest
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.BUMP_PR_TOKEN }}
           CURRENT: ${{ steps.check.outputs.current }}
           LATEST: ${{ steps.check.outputs.latest }}
         run: |
