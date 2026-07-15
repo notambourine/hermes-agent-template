@@ -34,8 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Don't bake GITHUB_TOKEN into .git/config (artipacked). The push step
-          # below re-auths explicitly via `gh auth setup-git`.
+          # Don't bake GITHUB_TOKEN into .git/config (artipacked). Nothing here
+          # pushes via git — branch and commit are created through the API.
           persist-credentials: false
 
       - name: Compare pinned ref to latest release
@@ -55,6 +55,7 @@ jobs:
         if: steps.check.outputs.current != steps.check.outputs.latest
         env:
           GH_TOKEN: ${{ secrets.BUMP_PR_TOKEN }}
+          REPO: ${{ github.repository }}
           CURRENT: ${{ steps.check.outputs.current }}
           LATEST: ${{ steps.check.outputs.latest }}
         run: |
@@ -69,26 +70,39 @@ jobs:
           semver="$(curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${LATEST}/pyproject.toml" \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
 
-          # Re-establish push auth dropped by persist-credentials: false. Routes
-          # git's HTTPS auth through the gh credential helper (uses GH_TOKEN),
-          # keeping the token out of .git/config and out of remote URLs.
-          gh auth setup-git
-
           # A merged/closed bump PR can leave its head branch on origin (repos
           # without auto-delete). The open-PR guard above already ruled out a live
-          # PR, so any hermes-bump/<tag> still here is stale — delete it, else the
-          # push below is a rejected non-fast-forward against the leftover ref.
-          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+          # PR, so any hermes-bump/<tag> still here is stale — delete it, else
+          # creating the ref below fails against the leftover branch.
+          if gh api "repos/${REPO}/git/ref/heads/${branch}" >/dev/null 2>&1; then
             echo "Deleting stale remote branch ${branch} (no open PR)."
-            git push origin --delete "${branch}"
+            gh api -X DELETE "repos/${REPO}/git/refs/heads/${branch}"
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${branch}"
+          # Branch + commit go through the API, not git push: the main ruleset
+          # requires verified signatures, and API-created commits are signed by
+          # GitHub's web-flow key. A git commit made on the runner would be
+          # unsigned, leaving the bump PR unmergeable.
+          head="$(git rev-parse HEAD)"
+          gh api "repos/${REPO}/git/refs" -f ref="refs/heads/${branch}" -f sha="${head}"
+
           sed -i "s|^ARG HERMES_REF=.*|ARG HERMES_REF=${LATEST}|" Dockerfile
-          git commit -am "chore: bump Hermes ${CURRENT} -> ${LATEST} (${semver})"
-          git push -u origin "${branch}"
+
+          # shellcheck disable=SC2016  # $vars are GraphQL variables, not shell
+          gh api graphql \
+            -f query='mutation($repo: String!, $branch: String!, $head: GitObjectID!, $msg: String!, $contents: Base64String!) {
+              createCommitOnBranch(input: {
+                branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                expectedHeadOid: $head,
+                message: {headline: $msg},
+                fileChanges: {additions: [{path: "Dockerfile", contents: $contents}]}
+              }) { commit { oid } }
+            }' \
+            -f repo="${REPO}" \
+            -f branch="${branch}" \
+            -f head="${head}" \
+            -f msg="chore: bump Hermes ${CURRENT} -> ${LATEST} (${semver})" \
+            -f contents="$(base64 -w0 Dockerfile)"
 
           # shellcheck disable=SC2016  # backticks are literal markdown code spans
           {
@@ -100,5 +114,6 @@ jobs:
           } > /tmp/pr-body.md
 
           gh pr create --draft \
+            --head "${branch}" \
             --title "chore: bump Hermes to ${LATEST} (${semver})" \
             --body-file /tmp/pr-body.md
